@@ -1,0 +1,144 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  provider      String    @default("email") // email, google, apple
+  passwordHash  String?   // null se for OAuth
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  subscriptions Subscription[]
+  moments        Moment[]
+
+  @@map("users")
+}
+
+model Plan {
+  id          String   @id @default(uuid())
+  type        String   @unique // ANNUAL, LIFETIME
+  name        String
+  price       Float
+  currency    String   @default("BRL")
+  description String?
+  features    Json?    // Array de features
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id            String    @id @default(uuid())
+  userId        String
+  planId        String
+  status        String    // active, expired, canceled
+  provider      String    // stripe, pix, mercado_pago
+  providerId    String?   // ID do pagamento no provider
+  renewalDate   DateTime?
+  canceledAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model Moment {
+  id          String   @id @default(uuid())
+  userId      String
+  slug        String   @unique
+  status      String   @default("draft") // draft, published
+  locale      String   @default("pt-BR")
+  themeId     String?
+  title       String?
+  introText   String?
+  introPhrase String?
+  recipientName String?
+  senderName  String?
+  startDate   DateTime?
+  settings    Json?    // cores, fontes, animações
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  blocks      MomentBlock[]
+  media       Media[]
+  qrCodes     QRCode[]
+  reactions   Reaction[]
+
+  @@map("moments")
+}
+
+model MomentBlock {
+  id        String   @id @default(uuid())
+  momentId  String
+  type      String   // counter, letter, gallery, timeline, surprise, playlist, map, timecapsule
+  content   Json     // conteúdo específico do bloco
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  moment Moment @relation(fields: [momentId], references: [id], onDelete: Cascade)
+
+  @@map("moment_blocks")
+}
+
+model Media {
+  id        String   @id @default(uuid())
+  momentId  String
+  url       String
+  type      String   // image, video, audio
+  size      Int?     // bytes
+  width     Int?
+  height    Int?
+  caption   String?
+  createdAt DateTime @default(now())
+
+  moment Moment @relation(fields: [momentId], references: [id], onDelete: Cascade)
+
+  @@map("media")
+}
+
+model QRCode {
+  id        String   @id @default(uuid())
+  momentId  String
+  style     String   @default("minimalist") // minimalist, floral, neon, etc
+  imageUrl  String?  // URL da imagem do QR gerada
+  createdAt DateTime @default(now())
+
+  moment Moment @relation(fields: [momentId], references: [id], onDelete: Cascade)
+
+  @@map("qr_codes")
+}
+
+model Reaction {
+  id        String   @id @default(uuid())
+  momentId  String
+  type      String   @default("heart") // heart, emoji, etc
+  message   String?
+  ipHash    String?  // hash do IP para privacidade
+  createdAt DateTime @default(now())
+
+  moment Moment @relation(fields: [momentId], references: [id], onDelete: Cascade)
+
+  @@map("reactions")
+}
+
