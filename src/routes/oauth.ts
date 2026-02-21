@@ -16,9 +16,12 @@ const googleClient = new OAuth2Client(
 
 // Generate JWT token
 const generateToken = (userId: string): string => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET!, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  });
+  const secret = process.env.JWT_SECRET as string;
+  return jwt.sign(
+    { userId },
+    secret,
+    { expiresIn: "7d" }
+  );
 };
 
 // Google OAuth - Get authorization URL
