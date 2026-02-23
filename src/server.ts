@@ -23,7 +23,11 @@ const prisma = new PrismaClient();
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:8080',
+  origin: [  
+    "https://minhaprovadeamor.com.br",
+    "https://www.minhaprovadeamor.com.br", 
+    'http://localhost:8080'
+  ],
   credentials: true,
 }));
 app.use(express.json());
