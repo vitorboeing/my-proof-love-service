@@ -21,11 +21,23 @@ dotenv.config();
 const app = express();
 const prisma = new PrismaClient();
 
-// Middleware
+// Middleware – CORS: aceita FRONTEND_URL do .env e localhost para desenvolvimento
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:8080',
+  'http://localhost:5173',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:5173',
+].filter(Boolean) as string[];
+
 app.use(cors({
-  origin: [  "https://minhaprovadeamor.com.br",
-    "https://www.minhaprovadeamor.com.br" , 
-    'http://localhost:8080'],
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
   credentials: true,
 }));
 app.use(express.json());

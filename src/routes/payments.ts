@@ -7,6 +7,22 @@ import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// SSE: clientes aguardando confirmação de pagamento por momentId
+const sseClients = new Map<string, Set<express.Response>>();
+
+function notifyPaymentApproved(momentId: string, slug: string) {
+  const clients = sseClients.get(momentId);
+  if (!clients) return;
+  const data = JSON.stringify({ slug });
+  clients.forEach((res) => {
+    try {
+      res.write(`event: payment_approved\ndata: ${data}\n\n`);
+      res.end();
+    } catch (_) { /* ignore */ }
+  });
+  sseClients.delete(momentId);
+}
+
 const accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
 const frontendUrl = process.env.FRONTEND_URL || 'https://jeanett-canvaslike-martine.ngrok-free.dev';
 const apiBaseUrl = (process.env.API_BASE_URL || 'https://strong-donuts-hug.loca.lt').trim();
@@ -52,6 +68,29 @@ async function resolvePlan(planId: string) {
   }
   return plan;
 }
+
+// SSE: frontend conecta e recebe evento quando o webhook confirma o pagamento
+router.get('/stream', (req, res) => {
+  const momentId = req.query.momentId as string;
+  if (!momentId) {
+    return res.status(400).json({ error: 'momentId required' });
+  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  if (!sseClients.has(momentId)) sseClients.set(momentId, new Set());
+  sseClients.get(momentId)!.add(res);
+  res.write(': connected\n\n');
+  req.on('close', () => {
+    const set = sseClients.get(momentId);
+    if (set) {
+      set.delete(res);
+      if (set.size === 0) sseClients.delete(momentId);
+    }
+  });
+});
 
 // Config para frontend (chave pública do MP - usada para tokenizar cartão)
 router.get('/config', (req, res) => {
@@ -505,6 +544,7 @@ router.post('/webhook/mercadopago', express.json(), async (req, res) => {
                 where: { id: momentId },
                 data: { status: 'published' },
               });
+              notifyPaymentApproved(momentId, moment.slug);
             }
           }
         }

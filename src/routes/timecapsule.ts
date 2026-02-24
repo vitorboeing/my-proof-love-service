@@ -70,8 +70,7 @@ router.get('/:momentId', async (req, res, next) => {
 
     // Filter only unlocked capsules
     const unlocked = timeCapsules.filter((block) => {
-      const content = block.content as any;
-      const unlockDate = new Date(content.unlockDate);
+      const unlockDate = new Date(block.content.unlockDate);
       return unlockDate <= now;
     });
 
