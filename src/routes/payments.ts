@@ -3,12 +3,32 @@ import { PrismaClient } from '@prisma/client';
 import { authenticate, AuthRequest } from '../middleware/auth.js';
 import { z } from 'zod';
 import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import path from 'path';
+import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// SSE: clientes aguardando confirmação de pagamento por momentId
+// Pendentes: momento em memória até confirmação do pagamento (Pix/Cartão)
+interface PendingMomentDto {
+  title?: string;
+  recipientName?: string;
+  senderName?: string;
+  introPhrase?: string;
+  startDate?: string | null;
+  blocks: { type: string; content: Record<string, unknown>; order: number }[];
+  images?: { caption?: string; base64: string }[];
+}
+const pendingMoments = new Map<string, { userId: string; momentDto: PendingMomentDto }>();
+
+// SSE: clientes aguardando confirmação por momentId (legado) ou pendingId
 const sseClients = new Map<string, Set<express.Response>>();
+const ssePendingClients = new Map<string, Set<express.Response>>();
 
 function notifyPaymentApproved(momentId: string, slug: string) {
   const clients = sseClients.get(momentId);
@@ -21,6 +41,88 @@ function notifyPaymentApproved(momentId: string, slug: string) {
     } catch (_) { /* ignore */ }
   });
   sseClients.delete(momentId);
+}
+
+function notifyPaymentApprovedByPendingId(pendingId: string, slug: string) {
+  const clients = ssePendingClients.get(pendingId);
+  if (!clients) return;
+  const data = JSON.stringify({ slug });
+  clients.forEach((res) => {
+    try {
+      res.write(`event: payment_approved\ndata: ${data}\n\n`);
+      res.end();
+    } catch (_) { /* ignore */ }
+  });
+  ssePendingClients.delete(pendingId);
+}
+
+function generateSlug(title?: string): string {
+  if (title) {
+    return title
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+      .substring(0, 50);
+  }
+  return `moment-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+}
+
+const uploadsDir = path.join(__dirname, '../../uploads');
+
+/** Cria o momento no banco a partir do payload guardado em memória (após pagamento aprovado) */
+async function createMomentFromPayload(userId: string, dto: PendingMomentDto): Promise<{ id: string; slug: string }> {
+  const slug = generateSlug(dto.title);
+  const existing = await prisma.moment.findUnique({ where: { slug } });
+  const finalSlug = existing ? `${slug}-${Date.now()}` : slug;
+
+  const moment = await prisma.moment.create({
+    data: {
+      userId,
+      slug: finalSlug,
+      status: 'published',
+      locale: 'pt-BR',
+      title: dto.title,
+      recipientName: dto.recipientName,
+      senderName: dto.senderName,
+      introPhrase: dto.introPhrase,
+      startDate: dto.startDate ? new Date(dto.startDate) : null,
+    },
+  });
+
+  for (const block of dto.blocks) {
+    await prisma.momentBlock.create({
+      data: {
+        momentId: moment.id,
+        type: block.type,
+        content: block.content as object,
+        order: block.order,
+      },
+    });
+  }
+
+  if (dto.images?.length) {
+    await fs.mkdir(uploadsDir, { recursive: true }).catch(() => {});
+    for (const img of dto.images) {
+      const base64 = img.base64.replace(/^data:image\/\w+;base64,/, '');
+      const buf = Buffer.from(base64, 'base64');
+      const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.png`;
+      const filePath = path.join(uploadsDir, filename);
+      await fs.writeFile(filePath, buf);
+      await prisma.media.create({
+        data: {
+          momentId: moment.id,
+          url: `/uploads/${filename}`,
+          type: 'image',
+          size: buf.length,
+          caption: img.caption || undefined,
+        },
+      });
+    }
+  }
+
+  return { id: moment.id, slug: moment.slug };
 }
 
 const accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
@@ -71,25 +173,41 @@ async function resolvePlan(planId: string) {
 
 // SSE: frontend conecta e recebe evento quando o webhook confirma o pagamento
 router.get('/stream', (req, res) => {
-  const momentId = req.query.momentId as string;
-  if (!momentId) {
-    return res.status(400).json({ error: 'momentId required' });
+  const momentId = req.query.momentId as string | undefined;
+  const pendingId = req.query.pendingId as string | undefined;
+  const key = pendingId || momentId;
+  if (!key) {
+    return res.status(400).json({ error: 'momentId or pendingId required' });
   }
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
-  if (!sseClients.has(momentId)) sseClients.set(momentId, new Set());
-  sseClients.get(momentId)!.add(res);
-  res.write(': connected\n\n');
-  req.on('close', () => {
-    const set = sseClients.get(momentId);
-    if (set) {
-      set.delete(res);
-      if (set.size === 0) sseClients.delete(momentId);
-    }
-  });
+
+  if (pendingId) {
+    if (!ssePendingClients.has(pendingId)) ssePendingClients.set(pendingId, new Set());
+    ssePendingClients.get(pendingId)!.add(res);
+    res.write(': connected\n\n');
+    req.on('close', () => {
+      const set = ssePendingClients.get(pendingId);
+      if (set) {
+        set.delete(res);
+        if (set.size === 0) ssePendingClients.delete(pendingId);
+      }
+    });
+  } else {
+    if (!sseClients.has(momentId!)) sseClients.set(momentId!, new Set());
+    sseClients.get(momentId!)!.add(res);
+    res.write(': connected\n\n');
+    req.on('close', () => {
+      const set = sseClients.get(momentId!);
+      if (set) {
+        set.delete(res);
+        if (set.size === 0) sseClients.delete(momentId!);
+      }
+    });
+  }
 });
 
 // Config para frontend (chave pública do MP - usada para tokenizar cartão)
@@ -380,6 +498,12 @@ router.post('/checkout/transparent/card', authenticate, async (req: AuthRequest,
               data: { status: 'published' },
             });
           }
+          return res.json({
+            paymentId: payment.id,
+            status: payment.status,
+            statusDetail: payment.status_detail,
+            ...(moment && { slug: moment.slug }),
+          });
         }
       }
     }
