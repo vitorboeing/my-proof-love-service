@@ -604,81 +604,112 @@ router.post(
   }
 );
 
+// GET na mesma URL: health check (confirma que a URL está acessível em produção).
+router.get('/webhook/mercadopago', (_req, res) => {
+  res.status(200).json({ ok: true, message: 'Webhook MP: use POST para notificações' });
+});
+
 // Webhook Mercado Pago (IPN - Instant Payment Notification)
-// MP envia: JSON { type, data: { id } } ou form-urlencoded topic, id
-router.post('/webhook/mercadopago', express.json(), async (req, res) => {
+// MP envia: JSON { type, data: { id }, action } - ex: action "payment.updated"
+// Respondemos 200 SEMPRE e cedo para evitar timeout/503; processamos em seguida.
+router.post('/webhook/mercadopago', express.json(), express.urlencoded({ extended: true }), async (req, res) => {
+  let responded = false;
+  const safeSend200 = () => {
+    if (responded) return;
+    responded = true;
     try {
-      const body = req.body || {};
-      const type = body.type || body.topic;
-      const paymentId = body.data?.id ?? body.id ?? req.query?.id;
+      res.status(200).json({ received: true });
+    } catch (_) {}
+  };
 
-      if (!paymentId) {
-        return res.status(400).json({ received: false, error: 'Missing payment id' });
-      }
+  try {
+    const body = req.body || {};
+    const type = body.type || body.topic;
+    const action = body.action;
+    const paymentId = body.data?.id ?? body.id ?? req.query?.id;
 
-      const id = String(paymentId);
+    console.log('Webhook MP received', { paymentId, type, action });
 
-      if (type === 'payment' || type === 'payment.created' || !type) {
+    if (!paymentId) {
+      safeSend200();
+      return;
+    }
+
+    safeSend200();
+
+    const id = String(paymentId);
+    const isPaymentEvent = type === 'payment' || type === 'payment.created' || !type ||
+      action === 'payment.updated' || action === 'payment.created';
+
+    if (!isPaymentEvent) return;
+
+    (async () => {
+      try {
         const { paymentClient } = getMercadoPagoClient();
         const payment = await paymentClient.get({ id });
 
-      if (payment.status === 'approved') {
-        const extRef = payment.external_reference || '';
-        const parts = extRef.split(':');
-        const [userId, planId, momentId] = parts;
-        if (userId && planId) {
-          const providerIdStr = id;
-          const planFound = await prisma.plan.findFirst({
-            where: { OR: [{ type: planId }, { id: planId }] },
-          });
-          const renewalDate =
-            planFound?.type === 'ANNUAL'
-              ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
-              : null;
-
-          const existing = await prisma.subscription.findFirst({
-            where: { providerId: providerIdStr, provider: 'mercado_pago' },
-          });
-
-          if (existing) {
-            await prisma.subscription.update({
-              where: { id: existing.id },
-              data: { status: 'active', renewalDate },
+        if (payment.status === 'approved') {
+          const extRef = payment.external_reference || '';
+          const parts = extRef.split(':');
+          const [userId, planId, momentId] = parts;
+          if (userId && planId) {
+            const providerIdStr = id;
+            const planFound = await prisma.plan.findFirst({
+              where: { OR: [{ type: planId }, { id: planId }] },
             });
-          } else if (planFound) {
-            await prisma.subscription.create({
-              data: {
-                userId,
-                planId: planFound.id,
-                status: 'active',
-                provider: 'mercado_pago',
-                providerId: providerIdStr,
-                renewalDate,
-              },
-            });
-          }
+            const renewalDate =
+              planFound?.type === 'ANNUAL'
+                ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+                : null;
 
-          // Publicar momento se veio no ref (userId:planId:momentId)
-          if (momentId) {
-            const moment = await prisma.moment.findFirst({
-              where: { id: momentId, userId },
+            const existing = await prisma.subscription.findFirst({
+              where: { providerId: providerIdStr, provider: 'mercado_pago' },
             });
-            if (moment && moment.status === 'draft') {
-              await prisma.moment.update({
-                where: { id: momentId },
-                data: { status: 'published' },
+
+            if (existing) {
+              await prisma.subscription.update({
+                where: { id: existing.id },
+                data: { status: 'active', renewalDate },
               });
-              notifyPaymentApproved(momentId, moment.slug);
+            } else if (planFound) {
+              await prisma.subscription.create({
+                data: {
+                  userId,
+                  planId: planFound.id,
+                  status: 'active',
+                  provider: 'mercado_pago',
+                  providerId: providerIdStr,
+                  renewalDate,
+                },
+              });
+            }
+
+            if (momentId) {
+              const moment = await prisma.moment.findFirst({
+                where: { id: momentId, userId },
+              });
+              if (moment && moment.status === 'draft') {
+                await prisma.moment.update({
+                  where: { id: momentId },
+                  data: { status: 'published' },
+                });
+                notifyPaymentApproved(momentId, moment.slug);
+              }
             }
           }
         }
+      } catch (err: unknown) {
+        const mpErr = err as { status?: number; error?: string; message?: string };
+        if (mpErr?.status === 404 || mpErr?.error === 'not_found') {
+          console.info('Webhook Mercado Pago: pagamento não encontrado (teste ou ID inválido), ignorando. id=', id);
+          return;
+        }
+        console.error('Webhook Mercado Pago process error:', err);
       }
-    }
-
-    res.status(200).json({ received: true });
+    })();
   } catch (err) {
-    console.error('Webhook Mercado Pago error:', err);
-    res.status(500).json({ received: false });
+    console.error('Webhook Mercado Pago handler error (antes de responder):', err);
+    safeSend200();
   }
 });
 
