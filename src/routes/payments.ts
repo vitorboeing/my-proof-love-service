@@ -172,6 +172,10 @@ async function resolvePlan(planId: string) {
 }
 
 // SSE: frontend conecta e recebe evento quando o webhook confirma o pagamento
+// Health check: GET /api/payments/stream/health → 200 (para testar se a rota existe em produção)
+router.get('/stream/health', (_req, res) => {
+  res.status(200).json({ ok: true, message: 'SSE stream disponível' });
+});
 router.get('/stream', (req, res) => {
   const momentId = req.query.momentId as string | undefined;
   const pendingId = req.query.pendingId as string | undefined;
