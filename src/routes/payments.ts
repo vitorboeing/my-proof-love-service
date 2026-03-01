@@ -176,6 +176,30 @@ async function resolvePlan(planId: string) {
 router.get('/stream/health', (_req, res) => {
   res.status(200).json({ ok: true, message: 'SSE stream disponível' });
 });
+
+// Polling: frontend consulta se o pagamento do momento já foi aprovado (fallback quando SSE não entrega, ex. múltiplas instâncias)
+router.get('/pending-status', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    const momentId = req.query.momentId as string | undefined;
+    if (!momentId) {
+      return res.status(400).json({ error: 'momentId required' });
+    }
+    const moment = await prisma.moment.findFirst({
+      where: { id: momentId, userId: req.userId! },
+      select: { status: true, slug: true },
+    });
+    if (!moment) {
+      return res.json({ approved: false });
+    }
+    res.json({
+      approved: moment.status === 'published',
+      slug: moment.status === 'published' ? moment.slug : undefined,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get('/stream', (req, res) => {
   const momentId = req.query.momentId as string | undefined;
   const pendingId = req.query.pendingId as string | undefined;
@@ -725,6 +749,9 @@ router.post('/webhook/mercadopago', express.json(), express.urlencoded({ extende
                   data: { status: 'published' },
                 });
                 notifyPaymentApproved(momentId, moment.slug);
+                console.log('[Webhook MP] Pagamento aprovado, momento publicado e notificação SSE enviada', { momentId, slug: moment.slug });
+              } else if (!moment) {
+                console.warn('[Webhook MP] momentId no external_reference mas momento não encontrado', { momentId, userId });
               }
             }
           }
