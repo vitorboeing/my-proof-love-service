@@ -344,10 +344,16 @@ router.post('/checkout/pix', authenticate, async (req: AuthRequest, res, next) =
       : `${req.userId!}:${plan.id}`;
 
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const transactionAmount = Number(plan.price);
+    if (Number.isNaN(transactionAmount) || transactionAmount <= 0) {
+      return res.status(400).json({ error: 'Valor do plano inválido' });
+    }
+
+    const idempotencyKey = `pix-${Date.now()}-${req.userId!}-${plan.id}-${momentId || 'noid'}`;
 
     const payment = await paymentClient.create({
       body: {
-        transaction_amount: plan.price,
+        transaction_amount: transactionAmount,
         description: plan.name,
         payment_method_id: 'pix',
         payer: {
@@ -359,16 +365,37 @@ router.post('/checkout/pix', authenticate, async (req: AuthRequest, res, next) =
         date_of_expiration: expiresAt.toISOString(),
         notification_url: `${apiBaseUrl}/api/payments/webhook/mercadopago`,
       },
+      requestOptions: {
+        idempotencyKey,
+      },
     });
 
-    const poi = payment.point_of_interaction?.transaction_data;
-    const qrCode = poi?.qr_code;
-    const qrCodeBase64 = poi?.qr_code_base64;
+    let poi = payment.point_of_interaction?.transaction_data;
+    let qrCode = poi?.qr_code;
+    let qrCodeBase64 = poi?.qr_code_base64;
+
+    // Em produção o MP às vezes retorna o QR de forma assíncrona; tenta GET após 1.5s
+    if (!qrCode && !qrCodeBase64 && payment.id) {
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        const refreshed = await paymentClient.get({ id: String(payment.id) });
+        poi = refreshed.point_of_interaction?.transaction_data;
+        qrCode = poi?.qr_code;
+        qrCodeBase64 = poi?.qr_code_base64;
+      } catch (e) {
+        console.warn('[Pix] GET payment after create failed:', e);
+      }
+    }
 
     if (!qrCode && !qrCodeBase64) {
-      console.error('MP Pix response:', JSON.stringify(payment, null, 2));
+      console.error('[Pix] MP não retornou QR. paymentId=%s status=%s live_mode=%s response=%s',
+        payment.id, payment.status, payment.live_mode,
+        JSON.stringify({
+          hasPointOfInteraction: !!payment.point_of_interaction,
+          transactionData: payment.point_of_interaction?.transaction_data,
+        }));
       return res.status(500).json({
-        error: 'Mercado Pago não retornou o QR Code. Tente novamente.',
+        error: 'Mercado Pago não retornou o QR Code. Em produção, confira: (1) Use credenciais de produção no .env (2) Ative o Pix na sua conta em developers.mercadopago.com (3) Tente novamente em alguns segundos.',
       });
     }
 
