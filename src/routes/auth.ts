@@ -27,9 +27,13 @@ const magicLinkSchema = z.object({
 
 // Generate JWT token
 const generateToken = (userId: string): string => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET!, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  });
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not set');
+  return jwt.sign(
+    { userId },
+    secret,
+    { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as string } as jwt.SignOptions,
+  );
 };
 
 // Register
