@@ -11,6 +11,8 @@ export interface SubscriptionInfo {
   maxMoments?: number;
   canPublish: boolean;
   canUsePremiumFeatures: boolean;
+  /** Data de renovação/expiração (só plano anual) */
+  renewalDate?: Date;
 }
 
 export const checkSubscription = async (
@@ -37,16 +39,26 @@ export const checkSubscription = async (
       },
     });
 
+    // Plano anual: considerar inativo se já passou da data de renovação
+    const now = new Date();
+    const isAnnualExpired =
+      subscription?.plan.type === 'ANNUAL' &&
+      subscription.renewalDate &&
+      now > subscription.renewalDate;
+
+    const effectiveSubscription = isAnnualExpired ? null : subscription;
+
     const subscriptionInfo: SubscriptionInfo = {
-      hasActiveSubscription: !!subscription,
-      planType: subscription?.plan.type as 'ANNUAL' | 'LIFETIME' | undefined,
+      hasActiveSubscription: !!effectiveSubscription,
+      planType: effectiveSubscription?.plan.type as 'ANNUAL' | 'LIFETIME' | undefined,
       canCreateMoments: true, // Free users can create drafts
-      canPublish: !!subscription,
-      canUsePremiumFeatures: !!subscription && subscription.plan.type === 'LIFETIME',
+      canPublish: !!effectiveSubscription,
+      canUsePremiumFeatures: !!effectiveSubscription && effectiveSubscription.plan.type === 'LIFETIME',
+      renewalDate: effectiveSubscription?.renewalDate ?? undefined,
     };
 
     // Check moment limits for annual plan
-    if (subscription?.plan.type === 'ANNUAL') {
+    if (effectiveSubscription?.plan.type === 'ANNUAL') {
       const momentCount = await prisma.moment.count({
         where: {
           userId: req.userId,
@@ -55,7 +67,7 @@ export const checkSubscription = async (
       });
       subscriptionInfo.maxMoments = 5;
       subscriptionInfo.canPublish = momentCount < 5;
-    } else if (subscription?.plan.type === 'LIFETIME') {
+    } else if (effectiveSubscription?.plan.type === 'LIFETIME') {
       subscriptionInfo.maxMoments = undefined; // Unlimited
     }
 

@@ -15,6 +15,7 @@ import paymentRoutes from './routes/payments.js';
 import reactionRoutes from './routes/reactions.js';
 import timeCapsuleRoutes from './routes/timecapsule.js';
 import templateRoutes from './routes/templates.js';
+import { scheduleExpireAnnualSubscriptions } from './jobs/expireAnnualSubscriptions.js';
 
 dotenv.config();
 
@@ -83,6 +84,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  scheduleExpireAnnualSubscriptions();
 });
 
 // Graceful shutdown
