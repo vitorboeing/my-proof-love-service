@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import type { SubscriptionInfo } from './subscription.js';
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -8,14 +9,7 @@ export interface AuthRequest extends Request {
     email: string;
     name?: string;
   };
-  subscription?: {
-    hasActiveSubscription: boolean;
-    planType?: 'ANNUAL' | 'LIFETIME';
-    canCreateMoments: boolean;
-    maxMoments?: number;
-    canPublish: boolean;
-    canUsePremiumFeatures: boolean;
-  };
+  subscription?: SubscriptionInfo;
 }
 
 export const authenticate = async (
