@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { isS3Configured, uploadToS3 } from '../lib/s3.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,22 +104,45 @@ async function createMomentFromPayload(userId: string, dto: PendingMomentDto): P
   }
 
   if (dto.images?.length) {
-    await fs.mkdir(uploadsDir, { recursive: true }).catch(() => {});
-    for (const img of dto.images) {
-      const base64 = img.base64.replace(/^data:image\/\w+;base64,/, '');
-      const buf = Buffer.from(base64, 'base64');
-      const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.png`;
-      const filePath = path.join(uploadsDir, filename);
-      await fs.writeFile(filePath, buf);
-      await prisma.media.create({
-        data: {
+    const useS3 = isS3Configured();
+    if (useS3) {
+      for (const img of dto.images) {
+        const base64 = img.base64.replace(/^data:image\/\w+;base64,/, '');
+        const buf = Buffer.from(base64, 'base64');
+        const url = await uploadToS3({
           momentId: moment.id,
-          url: `/uploads/${filename}`,
-          type: 'image',
-          size: buf.length,
-          caption: img.caption || undefined,
-        },
-      });
+          buffer: buf,
+          originalName: `image-${Date.now()}.png`,
+          mimeType: 'image/png',
+        });
+        await prisma.media.create({
+          data: {
+            momentId: moment.id,
+            url,
+            type: 'image',
+            size: buf.length,
+            caption: img.caption || undefined,
+          },
+        });
+      }
+    } else {
+      await fs.mkdir(uploadsDir, { recursive: true }).catch(() => {});
+      for (const img of dto.images) {
+        const base64 = img.base64.replace(/^data:image\/\w+;base64,/, '');
+        const buf = Buffer.from(base64, 'base64');
+        const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.png`;
+        const filePath = path.join(uploadsDir, filename);
+        await fs.writeFile(filePath, buf);
+        await prisma.media.create({
+          data: {
+            momentId: moment.id,
+            url: `/uploads/${filename}`,
+            type: 'image',
+            size: buf.length,
+            caption: img.caption || undefined,
+          },
+        });
+      }
     }
   }
 
