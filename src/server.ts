@@ -53,9 +53,27 @@ function buildAllowedOrigins(): string[] {
 }
 const allowedOrigins = buildAllowedOrigins();
 
+/** Verifica se a origem é do mesmo site que FRONTEND_URL (mesmo host com/sem www) */
+function isSameSiteOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  const front = process.env.FRONTEND_URL?.trim();
+  if (!front) return false;
+  try {
+    const a = new URL(front);
+    const b = new URL(origin);
+    const norm = (h: string) => h.replace(/^www\./, '').toLowerCase() || h;
+    return norm(a.hostname) === norm(b.hostname) && a.protocol === b.protocol;
+  } catch (_) {
+    return false;
+  }
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin) || isSameSiteOrigin(origin)) {
       return callback(null, true);
     }
     callback(null, false);
