@@ -153,6 +153,21 @@ const accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
 const frontendUrl = process.env.FRONTEND_URL || 'https://jeanett-canvaslike-martine.ngrok-free.dev';
 const apiBaseUrl = (process.env.API_BASE_URL || 'https://strong-donuts-hug.loca.lt').trim();
 
+/** Retorna a base URL para redirects de pagamento: usa returnBaseUrl do client se for do mesmo site (www/não-www), senão FRONTEND_URL */
+function getReturnBaseUrl(returnBaseUrl?: string | null): string {
+  const base = (frontendUrl || '').trim();
+  if (!returnBaseUrl || typeof returnBaseUrl !== 'string') return base;
+  const candidate = returnBaseUrl.trim().replace(/\/+$/, '');
+  if (!candidate) return base;
+  try {
+    const a = new URL(base);
+    const b = new URL(candidate);
+    const norm = (h: string) => h.replace(/^www\./, '') || h;
+    if (norm(a.hostname) === norm(b.hostname) && a.protocol === b.protocol) return candidate;
+  } catch (_) {}
+  return base;
+}
+
 // https://fifty-steaks-grab.loca.lt
 
 const mpConfig = accessToken ? new MercadoPagoConfig({ accessToken }) : null;
@@ -163,6 +178,7 @@ const preferenceClient = mpConfig ? new Preference(mpConfig) : null;
 const createCheckoutSchema = z.object({
   planId: z.string(),
   momentId: z.string().optional(),
+  returnBaseUrl: z.string().url().optional().nullable(),
 });
 
 function getMercadoPagoClient() {
@@ -290,8 +306,9 @@ router.post(
   authenticate,
   async (req: AuthRequest, res, next) => {
     try {
-      const { planId, momentId } = createCheckoutSchema.parse(req.body);
+      const { planId, momentId, returnBaseUrl } = createCheckoutSchema.parse(req.body);
       const { preferenceClient } = getMercadoPagoClient();
+      const base = getReturnBaseUrl(returnBaseUrl);
 
       const user = await prisma.user.findUnique({
         where: { id: req.userId! },
@@ -326,9 +343,9 @@ router.post(
             name: user.name || user.email.split('@')[0],
           },
           back_urls: {
-            success: `${frontendUrl}/checkout/success?ref=${encodeURIComponent(externalRef)}`,
-            failure: `${frontendUrl}/criar?plan=${planId}&error=payment_failed`,
-            pending: `${frontendUrl}/checkout/pending?ref=${encodeURIComponent(externalRef)}`,
+            success: `${base}/checkout/success?ref=${encodeURIComponent(externalRef)}`,
+            failure: `${base}/criar?plan=${planId}&error=payment_failed`,
+            pending: `${base}/checkout/pending?ref=${encodeURIComponent(externalRef)}`,
           },
           payment_methods: {
             excluded_payment_types: [
@@ -617,8 +634,9 @@ router.post(
   authenticate,
   async (req: AuthRequest, res, next) => {
     try {
-      const { planId } = createCheckoutSchema.parse(req.body);
+      const { planId, returnBaseUrl } = createCheckoutSchema.parse(req.body);
       const { preferenceClient } = getMercadoPagoClient();
+      const base = getReturnBaseUrl(returnBaseUrl);
 
       const user = await prisma.user.findUnique({
         where: { id: req.userId! },
@@ -651,9 +669,9 @@ router.post(
             name: user.name || user.email.split('@')[0],
           },
           back_urls: {
-            success: `${frontendUrl}/checkout/success?ref=${externalRef}`,
-            failure: `${frontendUrl}/checkout?plan=${planId}&error=payment_failed`,
-            pending: `${frontendUrl}/checkout/pending?ref=${externalRef}`,
+            success: `${base}/checkout/success?ref=${externalRef}`,
+            failure: `${base}/checkout?plan=${planId}&error=payment_failed`,
+            pending: `${base}/checkout/pending?ref=${externalRef}`,
           },
           payment_methods: {
             excluded_payment_types: [

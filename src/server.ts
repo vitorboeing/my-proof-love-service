@@ -22,22 +22,43 @@ dotenv.config();
 const app = express();
 const prisma = new PrismaClient();
 
-// Middleware – CORS: aceita FRONTEND_URL do .env e localhost para desenvolvimento
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:8080',
-  'http://localhost:5173',
-  'http://127.0.0.1:8080',
-  'http://127.0.0.1:5173',
-].filter(Boolean) as string[];
+// Middleware – CORS: aceita FRONTEND_URL do .env (e variantes www/não-www) e localhost para desenvolvimento
+function buildAllowedOrigins(): string[] {
+  const list: string[] = [
+    'http://localhost:8080',
+    'http://localhost:5173',
+    'http://127.0.0.1:8080',
+    'http://127.0.0.1:5173',
+  ];
+  const front = process.env.FRONTEND_URL?.trim();
+  if (front) {
+    list.push(front);
+    try {
+      const u = new URL(front);
+      if (u.hostname.startsWith('www.')) {
+        list.push(`${u.protocol}//${u.hostname.slice(4)}${u.port ? ':' + u.port : ''}`);
+      } else {
+        list.push(`${u.protocol}//www.${u.hostname}${u.port ? ':' + u.port : ''}`);
+      }
+    } catch (_) {}
+  }
+  const extra = process.env.FRONTEND_URL_EXTRA;
+  if (extra) {
+    extra.split(',').forEach((s) => {
+      const o = s.trim();
+      if (o) list.push(o);
+    });
+  }
+  return list;
+}
+const allowedOrigins = buildAllowedOrigins();
 
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, false);
+      return callback(null, true);
     }
+    callback(null, false);
   },
   credentials: true,
 }));
